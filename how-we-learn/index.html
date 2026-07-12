@@ -94,13 +94,6 @@
   #legend .row { display: flex; align-items: center; gap: 8px; }
   #legend .swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 
-  /* ---- Node label (persistent small tag, CSS2D) ----
-     The anchor div is what Three.js's CSS2DRenderer positions and
-     transforms every frame to track the node's exact 3D point — it
-     always overwrites that element's own transform, so any offset has
-     to live on a separate CHILD element instead (positioned dynamically
-     in JS based on the node's current on-screen radius, so the label
-     clears the circle beneath it at any zoom level). */
   .node-label-anchor { position: absolute; left: 0; top: 0; width: 0; height: 0; }
   .node-label {
     position: absolute;
@@ -121,7 +114,6 @@
   .node-label.depth-1 { font-size: 12.5px; }
   .node-label.depth-2 { font-size: 11px; color: var(--text-dim); font-weight: 500; }
 
-  /* ---- Info panel: opaque side drawer (60:40 split with the 3D web) ---- */
   #info-panel {
     position: relative;
     flex: 0 0 0%;
@@ -221,15 +213,6 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 
-/* =========================================================================
-   CONTENT DATA
-   Source: Dorian Peters, "Interface Design for Learning," Chapter 2:
-   How We Learn, UXmatters (2014).
-
-   Each node can optionally take an "image" field set to a URL/path — if
-   present it's used instead of the auto-generated placeholder. That's the
-   spot to swap in real pictures later.
-========================================================================= */
 const COLORS = {
   behaviorism: "#ef6461",
   cognitivism: "#4ea8de",
@@ -301,9 +284,6 @@ const data = {
   ]
 };
 
-/* =========================================================================
-   SCENE SETUP
-========================================================================= */
 const container = document.getElementById("scene-container");
 const labelLayer = document.getElementById("label-layer");
 
@@ -329,11 +309,10 @@ const pointLight = new THREE.PointLight(0xffffff, 0.6);
 pointLight.position.set(10, 10, 10);
 scene.add(pointLight);
 
-/* ---- Orbit controls: rotate only, center point never moves ---- */
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
-controls.enablePan = false;              // center stays locked in the middle
-controls.enableDamping = true;           // smooth "spin" momentum
+controls.enablePan = false;
+controls.enableDamping = true;
 controls.dampingFactor = 0.07;
 controls.rotateSpeed = 0.6;
 controls.minDistance = 3;
@@ -350,10 +329,6 @@ controls.addEventListener("end", () => {
   idleTimer = setTimeout(() => { controls.autoRotate = true; }, 4000);
 });
 
-/* =========================================================================
-   LAYOUT — position every node once in 3D space (static; only visibility
-   and scale animate on expand/collapse, positions never move)
-========================================================================= */
 function fibonacciSphere(samples) {
   const pts = [];
   if (samples === 1) { pts.push(new THREE.Vector3(0, 1, 0)); return pts; }
@@ -385,8 +360,8 @@ function coneDirections(axis, count, coneAngleDeg) {
   return dirs;
 }
 
-const R1 = 2.6;   // branch radius (arm length from center — shortened 50%)
-const R2 = 4.2;   // leaf radius (arm length from center — shortened 50%)
+const R1 = 2.0;   
+const R2 = 4.0;   
 
 data.position = new THREE.Vector3(0, 0, 0);
 const branchDirs = fibonacciSphere(data.children.length);
@@ -398,9 +373,6 @@ data.children.forEach((branch, i) => {
   });
 });
 
-/* =========================================================================
-   BUILD SCENE OBJECTS
-========================================================================= */
 function makePlaceholderCanvas(emoji, color) {
   const size = 256;
   const canvas = document.createElement("canvas");
@@ -436,11 +408,6 @@ function shade(hex, percent) {
   return `rgb(${r},${g},${b})`;
 }
 
-// Loads a real photo and crops/masks it into the same circular, ringed
-// style as the generated placeholders — so any image (any shape, any
-// aspect ratio) automatically matches the look of the rest of the map.
-// Calls onReady(canvas, dataUrl) once it's done; silently leaves the
-// placeholder in place if the image fails to load.
 function loadImageAsCircle(url, onReady) {
   const img = new Image();
   img.crossOrigin = "anonymous";
@@ -468,7 +435,7 @@ function loadImageAsCircle(url, onReady) {
   img.src = url;
 }
 
-const registry = []; // flat list of every node's runtime info, for raycasting + controls
+const registry = [];
 
 function buildNode(nodeData, depth, parentWorldPos) {
   const group = new THREE.Group();
@@ -477,9 +444,7 @@ function buildNode(nodeData, depth, parentWorldPos) {
   group.scale.setScalar(depth === 0 ? 1 : 0.0001);
 
   const size = depth === 0 ? 1.0 : depth === 1 ? 0.75 : 0.55;
-  // Render the placeholder immediately so nothing is ever blank; if
-  // nodeData.image is set, swap it in (auto-cropped to match the circular
-  // placeholder style) once it finishes loading.
+
   const placeholderCanvas = makePlaceholderCanvas(nodeData.emoji, nodeData.color);
   const texture = new THREE.CanvasTexture(placeholderCanvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -488,10 +453,6 @@ function buildNode(nodeData, depth, parentWorldPos) {
   sprite.scale.set(size, size, 1);
   group.add(sprite);
 
-  // persistent name label, sits underneath the point. The anchor div is
-  // what CSS2DObject tracks in 3D; the inner label div gets its own
-  // downward offset set dynamically each frame (see positionLabels()) so
-  // it always clears below the visible circle, at any zoom level.
   const labelAnchor = document.createElement("div");
   labelAnchor.className = "node-label-anchor";
   const labelDiv = document.createElement("div");
@@ -520,7 +481,7 @@ function buildNode(nodeData, depth, parentWorldPos) {
       sprite.material.map = newTexture;
       sprite.material.needsUpdate = true;
       entry.imageSrc = dataUrl;
-      if (selectedEntry === entry) panelThumb.src = dataUrl; // live-update an already-open panel
+      if (selectedEntry === entry) panelThumb.src = dataUrl;
     });
   }
 
@@ -546,9 +507,6 @@ function buildLine(fromPos, toPos, color) {
 
 const rootEntry = buildNode(data, 0, new THREE.Vector3(0,0,0));
 
-/* =========================================================================
-   TWEENING (lightweight, no external library)
-========================================================================= */
 const tweens = [];
 function easeOutBack(t) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
 function easeInCubic(t) { return t * t * t; }
@@ -566,7 +524,6 @@ function stepTweens(now) {
   }
 }
 
-// Vector3 tweens — used to smoothly "shift the frame focus" (camera position + orbit target)
 const vecTweens = [];
 function addVecTween(fromVec, toVec, duration, onUpdate, ease) {
   vecTweens.push({ from: fromVec.clone(), to: toVec.clone(), start: performance.now(), duration, onUpdate, ease: ease || easeInOutCubic });
@@ -582,15 +539,9 @@ function stepVecTweens(now) {
   }
 }
 
-/* =========================================================================
-   FOCUS / CAMERA NAVIGATION
-   focusStack tracks the drill-down path (breadcrumb). Clicking an
-   expandable point pushes it and shifts the frame to center on it;
-   collapsing pops it and shifts the frame back to the previous point.
-========================================================================= */
 const focusStack = [];
 const FOCUS_DURATION = 850;
-const FOCUS_DISTANCE = [9, 4.3, 2.8]; // root, branch (secondary), leaf (tertiary)
+const FOCUS_DISTANCE = [9, 4.3, 2.8];
 function distanceForEntry(entry) {
   return FOCUS_DISTANCE[entry.depth] ?? 2.8;
 }
@@ -606,12 +557,6 @@ function focusOn(entry) {
   addVecTween(fromCamPos, toCamPos, FOCUS_DURATION, v => camera.position.copy(v));
 }
 
-/* =========================================================================
-   INFO PANEL — a single shared opaque side drawer (not tied to any one
-   node's 3D position). Opening it shrinks the 3D view to 60% width; closing
-   it returns the 3D view to full width. Only the selected node's label is
-   ever hidden — everything else in view keeps its title.
-========================================================================= */
 const appEl = document.getElementById("app");
 const infoPanelEl = document.getElementById("info-panel");
 const panelThumb = document.getElementById("panel-thumb");
@@ -635,7 +580,7 @@ function selectNode(entry) {
   appEl.classList.add("panel-open");
   infoPanelEl.classList.add("open");
   if (previous) syncLabel(previous);
-  syncLabel(entry); // hides this node's own title while its panel is open
+  syncLabel(entry);
 }
 function deselectNode() {
   const previous = selectedEntry;
@@ -653,10 +598,6 @@ document.getElementById("panel-close").addEventListener("click", () => {
   focusOn(focusStack[focusStack.length - 1] || rootEntry);
 });
 
-// Removes entry (and anything deeper) from the focus breadcrumb — used
-// whenever a node gets force-hidden outside the normal click flow, so
-// "collapse" never tries to shift focus back to a point that's no longer
-// on screen.
 function pruneFocusStack(entry) {
   const idx = focusStack.indexOf(entry);
   if (idx !== -1) focusStack.splice(idx);
@@ -702,14 +643,11 @@ function hideInstant(entry) {
   });
 }
 
-// Hide/show the OTHER children of entry's parent — keeps only the active
-// branch of the current tier on screen ("hide all other points until a
-// parent node is clicked").
 function hideSiblings(entry) {
   if (!entry.parentEntry) return;
   entry.parentEntry.childEntries.forEach(sib => {
     if (sib === entry) return;
-    if (sib.expanded) collapseEntry(sib); // retract any of its own open children first
+    if (sib.expanded) collapseEntry(sib);
     if (selectedEntry === sib) deselectNode();
     pruneFocusStack(sib);
     addTween(sib.group.scale.x, 0.0001, 350, v => sib.group.scale.setScalar(v), () => { sib.group.visible = false; }, easeInCubic);
@@ -732,8 +670,6 @@ function handleNodeClick(entry) {
   const hasChildren = entry.childEntries.length > 0;
 
   if (hasChildren && entry.expanded) {
-    // COLLAPSE — hide this tier, restore its siblings, shift focus back to
-    // whatever was focused before it (the "previous point").
     if (selectedEntry === entry) deselectNode();
     collapseEntry(entry);
     showSiblings(entry);
@@ -744,8 +680,6 @@ function handleNodeClick(entry) {
   }
 
   if (hasChildren) {
-    // EXPAND — hide sibling points first so only this branch is visible,
-    // reveal its children, and shift the frame to focus on it.
     hideSiblings(entry);
     expandEntry(entry);
     selectNode(entry);
@@ -754,8 +688,6 @@ function handleNodeClick(entry) {
     return;
   }
 
-  // Leaf (tertiary) node — no further tier, but still dolly the camera to it
-  // like a secondary node, and shift back when it's deselected.
   if (selectedEntry === entry) {
     deselectNode();
     const idx = focusStack.indexOf(entry);
@@ -788,9 +720,6 @@ document.getElementById("btn-reset").addEventListener("click", () => {
   focusOn(rootEntry);
 });
 
-/* =========================================================================
-   CLICK DETECTION (distinguish a click from a drag-to-rotate)
-========================================================================= */
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let pointerDown = null;
@@ -802,7 +731,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   if (!pointerDown) return;
   const dx = e.clientX - pointerDown.x, dy = e.clientY - pointerDown.y;
   pointerDown = null;
-  if (Math.sqrt(dx*dx + dy*dy) > 6) return; // was a drag/rotate, not a click
+  if (Math.sqrt(dx*dx + dy*dy) > 6) return;
 
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -821,12 +750,6 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   }
 });
 
-/* =========================================================================
-   RESIZE + RENDER LOOP
-   The 3D viewport resizes both on window resize AND whenever the info
-   panel opens/closes (the container's flex-basis animates from 100% to
-   60%), so a ResizeObserver on the container catches both cases.
-========================================================================= */
 function onContainerResize() {
   const w = container.clientWidth, h = container.clientHeight;
   if (w === 0 || h === 0) return;
@@ -838,10 +761,8 @@ function onContainerResize() {
 window.addEventListener("resize", onContainerResize);
 new ResizeObserver(onContainerResize).observe(container);
 
-// Keep every label pinned just below its circle's actual on-screen edge,
-// regardless of zoom/distance — computed fresh each frame since distance
-// (and therefore apparent circle size) keeps changing as the camera moves.
-const LABEL_GAP = 8; // px of breathing room between the circle's edge and the label
+  
+const LABEL_GAP = 8;
 const vFovRad = THREE.MathUtils.degToRad(camera.fov);
 function spriteScreenRadiusPx(entry) {
   const dist = Math.max(0.001, camera.position.distanceTo(entry.group.position));
