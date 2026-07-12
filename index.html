@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How We Learn — 3D Interactive Map</title>
+<style>
+  :root {
+    --bg: #12141c;
+    --bg2: #1a1d29;
+    --text: #eef0f6;
+    --text-dim: #9aa1b5;
+    --root: #f4f1e8;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: radial-gradient(ellipse at center, var(--bg2) 0%, var(--bg) 70%);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    overflow: hidden;
+  }
+  #app { position: relative; width: 100vw; height: 100vh; display: flex; }
+  #scene-container {
+    position: relative;
+    flex: 1 1 100%;
+    min-width: 0;
+    height: 100%;
+    transition: flex-basis 450ms ease;
+  }
+  #app.panel-open #scene-container { flex: 0 0 60%; }
+  #scene-container canvas { display: block; }
+  #label-layer {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  header {
+    position: absolute; top: 0; left: 0; right: 0;
+    text-align: center; padding: 18px 12px 8px;
+    z-index: 5; pointer-events: none;
+  }
+  header h1 { margin: 0; font-size: clamp(18px, 3vw, 26px); font-weight: 700; letter-spacing: 0.5px; }
+  header p { margin: 4px 0 0; font-size: clamp(11px, 1.6vw, 14px); color: var(--text-dim); }
+
+  #hint {
+    position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: var(--text-dim);
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 5px 12px; border-radius: 999px;
+    z-index: 5; transition: opacity 600ms ease;
+  }
+
+  #controls {
+    position: absolute; bottom: 16px; left: 16px; z-index: 6;
+    display: flex; gap: 14px; pointer-events: auto;
+  }
+  #controls button {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: var(--text);
+    padding: 16px 28px;
+    border-radius: 999px;
+    font-size: 24px;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: background 150ms ease, transform 150ms ease;
+  }
+  #controls button:hover { background: rgba(255,255,255,0.18); }
+  #btn-reset {
+    background: #f4a261;
+    border: 1px solid #f4a261;
+    color: #1a1208;
+    font-weight: 800;
+    font-size: 26px;
+    padding: 20px 40px;
+  }
+  #btn-reset:hover { background: #f7b47e; transform: translateY(-1px); }
+
+  #legend {
+    position: absolute; bottom: 16px; right: 16px; z-index: 6;
+    display: flex; flex-direction: column; gap: 6px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 10px 14px;
+    backdrop-filter: blur(6px);
+    font-size: 11px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+  #legend .row { display: flex; align-items: center; gap: 8px; }
+  #legend .swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+  /* ---- Node label (persistent small tag, CSS2D) ----
+     The anchor div is what Three.js's CSS2DRenderer positions and
+     transforms every frame to track the node's exact 3D point — it
+     always overwrites that element's own transform, so any offset has
+     to live on a separate CHILD element instead (positioned dynamically
+     in JS based on the node's current on-screen radius, so the label
+     clears the circle beneath it at any zoom level). */
+  .node-label-anchor { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+  .node-label {
+    position: absolute;
+    left: 0; top: 0;
+    transform: translate(-50%, 40px);
+    pointer-events: none;
+    white-space: nowrap;
+    font-weight: 600;
+    color: var(--text);
+    background: rgba(15, 16, 24, 0.55);
+    border-radius: 999px;
+    padding: 3px 9px;
+    border-left: 3px solid #fff;
+    backdrop-filter: blur(2px);
+    transition: opacity 150ms ease;
+  }
+  .node-label.depth-0 { font-size: 15px; font-weight: 800; padding: 5px 14px; }
+  .node-label.depth-1 { font-size: 12.5px; }
+  .node-label.depth-2 { font-size: 11px; color: var(--text-dim); font-weight: 500; }
+
+  /* ---- Info panel: opaque side drawer (60:40 split with the 3D web) ---- */
+  #info-panel {
+    position: relative;
+    flex: 0 0 0%;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #14151d;
+    box-shadow: -18px 0 40px rgba(0,0,0,0.5);
+    border-left: 1px solid rgba(255,255,255,0.08);
+    transition: flex-basis 450ms ease;
+  }
+  #info-panel.open { flex: 0 0 40%; }
+  #info-panel-inner {
+    position: absolute; inset: 0;
+    width: 100%;
+    padding: 30px 34px;
+    opacity: 0;
+    transition: opacity 300ms ease 100ms;
+    overflow-y: auto;
+  }
+  #info-panel.open #info-panel-inner { opacity: 1; }
+  #info-panel .close {
+    position: absolute; top: 18px; right: 20px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+    color: var(--text); width: 30px; height: 30px; border-radius: 50%;
+    font-size: 16px; cursor: pointer; line-height: 1;
+  }
+  #info-panel .close:hover { background: rgba(255,255,255,0.18); }
+  #info-panel .thumb {
+    width: 96px; height: 96px; border-radius: 50%;
+    display: block; margin: 6px 0 20px;
+    border: 3px solid rgba(255,255,255,0.5);
+    object-fit: cover;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  #info-panel h3 { margin: 0 0 14px; font-size: 22px; line-height: 1.25; color: var(--text); padding-right: 30px; }
+  #info-panel p { margin: 0; font-size: 15px; line-height: 1.65; color: var(--text-dim); }
+
+  @media (max-width: 640px) {
+    #legend { display: none; }
+    #app { flex-direction: column; }
+    #app.panel-open #scene-container { flex: 1 1 55%; }
+    #info-panel.open { flex: 0 0 45%; }
+    #info-panel { border-left: none; border-top: 1px solid rgba(255,255,255,0.08); box-shadow: 0 -18px 40px rgba(0,0,0,0.5); }
+    #info-panel-inner { padding: 20px 22px; }
+    #info-panel .thumb { width: 64px; height: 64px; margin: 4px 0 12px; }
+    #info-panel h3 { font-size: 17px; }
+    #info-panel p { font-size: 13.5px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="scene-container">
+    <div id="label-layer"></div>
+
+    <header>
+      <h1>How We Learn</h1>
+      <p>Click a point to open it — drag to spin the cloud, scroll to zoom</p>
+    </header>
+    <div id="hint">Tip: click-drag anywhere to rotate — the center point stays fixed</div>
+
+    <div id="controls">
+      <button id="btn-expand">Expand all</button>
+      <button id="btn-reset">Reset</button>
+    </div>
+
+    <div id="legend">
+      <div class="row"><span class="swatch" style="background:#ef6461"></span> Behaviorism</div>
+      <div class="row"><span class="swatch" style="background:#4ea8de"></span> Cognitivism</div>
+      <div class="row"><span class="swatch" style="background:#52b788"></span> Constructivism</div>
+      <div class="row"><span class="swatch" style="background:#f4a261"></span> Connectivism</div>
+      <div class="row"><span class="swatch" style="background:#b185db"></span> Designing for Experience</div>
+    </div>
+  </div>
+
+  <div id="info-panel">
+    <div id="info-panel-inner">
+      <button class="close" id="panel-close" aria-label="Close">&times;</button>
+      <img class="thumb" id="panel-thumb" src="" alt="">
+      <h3 id="panel-title"></h3>
+      <p id="panel-text"></p>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+
+/* =========================================================================
+   CONTENT DATA
+   Source: Dorian Peters, "Interface Design for Learning," Chapter 2:
+   How We Learn, UXmatters (2014).
+
+   Each node can optionally take an "image" field set to a URL/path — if
+   present it's used instead of the auto-generated placeholder. That's the
+   spot to swap in real pictures later.
+========================================================================= */
+const COLORS = {
+  behaviorism: "#ef6461",
+  cognitivism: "#4ea8de",
+  constructivism: "#52b788",
+  connectivism: "#f4a261",
+  closing: "#b185db",
+  root: "#f4f1e8"
+};
+
+const data = {
+  name: "How We Learn",
+  color: COLORS.root,
+  emoji: "🎓",
+  image: null,
+  detail: "Empty vessel, or active builder? Every branch below answers that question differently — and shapes how a learning experience gets designed.",
+  children: [
+    {
+      name: "Behaviorism", color: COLORS.behaviorism, emoji: "🐕", image: null,
+      detail: "Learning as behavior change. Only observable, measurable behavior counts — the mind was treated as an unknowable “black box.” Learning happens through conditioning: stimulus in, response out.",
+      children: [
+        { name: "Ivan Pavlov", color: COLORS.behaviorism, emoji: "🔔", image: null, detail: "Classical conditioning — a neutral stimulus (a bell) becomes linked to an automatic response (salivating), shown in his famous dog experiments." },
+        { name: "Edward Thorndike", color: COLORS.behaviorism, emoji: "🐾", image: null, detail: "Operant conditioning and the “Law of Effect”: behaviors followed by pleasure are repeated; behaviors followed by displeasure are not." },
+        { name: "B.F. Skinner", color: COLORS.behaviorism, emoji: "🎯", image: null, detail: "Reinforcement & punishment — positive/negative reinforcement and positive/negative punishment, used to systematically shape behavior." },
+        { name: "Benjamin Bloom", color: COLORS.behaviorism, emoji: "📊", image: null, detail: "Bloom's Taxonomy classifies learning objectives from simple to complex: remember, understand, apply, analyze, evaluate, create (2001 revision)." },
+        { name: "In eLearning Today", color: COLORS.behaviorism, emoji: "🏆", image: null, detail: "Computer-Assisted Instruction (CAI), “page-turner” courseware, drill-and-practice exercises, and gamification (points, badges, levels, leaderboards)." }
+      ]
+    },
+    {
+      name: "Cognitivism", color: COLORS.cognitivism, emoji: "🧠", image: null,
+      detail: "Mind as computer. Fills the gap behaviorism left: our actions come from internal mental processing, not just outside stimuli. The mind is modeled like a computer that takes in, processes, and stores information.",
+      children: [
+        { name: "Robert Gagné", color: COLORS.cognitivism, emoji: "🪜", image: null, detail: "Pioneered Instructional Design (the ADDIE model) and the “9 Events of Instruction”: gain attention, inform objectives, recall prior learning, present content, guide, practice, feedback, assess, retain/transfer." },
+        { name: "George Miller", color: COLORS.cognitivism, emoji: "🔢", image: null, detail: "Working memory holds about 7 (±2) items at once (“Miller's Law”); we manage more by “chunking” information into groups." },
+        { name: "John Sweller", color: COLORS.cognitivism, emoji: "⚖️", image: null, detail: "Cognitive Load Theory — learning suffers when unnecessary complexity (“extraneous cognitive load”) overloads our limited working memory." },
+        { name: "Richard Mayer", color: COLORS.cognitivism, emoji: "🎬", image: null, detail: "Cognitive Theory of Multimedia Learning — we process visuals and audio through separate channels; 12 evidence-based principles guide how to combine text, graphics, and audio effectively." },
+        { name: "In eLearning Today", color: COLORS.cognitivism, emoji: "🤖", image: null, detail: "Intelligent Tutoring Systems (software that adapts to an individual learner) and research-based multimedia design guidelines." }
+      ]
+    },
+    {
+      name: "Constructivism", color: COLORS.constructivism, emoji: "🧱", image: null,
+      detail: "Knowledge built by the learner. Learners aren't empty vessels — they actively construct their own understanding from experience, prior knowledge, and (in the social version) interaction with others.",
+      children: [
+        { name: "Jean Piaget", color: COLORS.constructivism, emoji: "🧩", image: null, detail: "Cognitive constructivism — 4 stages of development (sensorimotor, pre-operational, concrete operational, formal operational), learning through assimilation and accommodation." },
+        { name: "Lev Vygotsky", color: COLORS.constructivism, emoji: "🤝", image: null, detail: "Social constructivism and the Zone of Proximal Development (ZPD) — the gap between what a learner can do alone and what they can do with support. The theoretical root of scaffolding." },
+        { name: "Scardamalia & Bereiter", color: COLORS.constructivism, emoji: "💡", image: null, detail: "Knowledge Building — shifts the focus from individual learning to a community collaboratively creating and improving ideas." },
+        { name: "In eLearning Today", color: COLORS.constructivism, emoji: "🗂️", image: null, detail: "Wikis, collaborative media tools, discussion forums, and 3D virtual worlds/simulations where learners explore and build knowledge together." }
+      ]
+    },
+    {
+      name: "Connectivism", color: COLORS.connectivism, emoji: "🌐", image: null,
+      detail: "& the Learning Sciences. As knowledge grows faster than any one person can keep up with, knowing where to find and how to evaluate information matters more than memorizing it. Learning happens across whole “ecologies,” not just inside a classroom.",
+      children: [
+        { name: "George Siemens", color: COLORS.connectivism, emoji: "🔗", image: null, detail: "Connectivism — learning is the ability to form and navigate connections between pieces of knowledge and networks (people, technology, information sources)." },
+        { name: "John Seely Brown", color: COLORS.connectivism, emoji: "🌱", image: null, detail: "“Learning ecologies” and Personal Learning Environments that connect learners to content, activities, and people anytime, anywhere." },
+        { name: "Lave & Wenger", color: COLORS.connectivism, emoji: "👥", image: null, detail: "Situated learning and “communities of practice” — learning through real-world context and shared work with more knowledgeable peers." },
+        { name: "The Learning Sciences", color: COLORS.connectivism, emoji: "🔬", image: null, detail: "The “How People Learn” report's 5 key findings: support deep conceptual understanding, focus on learning (not just teaching), design real learning environments, build on prior knowledge, and support reflection." },
+        { name: "In eLearning Today", color: COLORS.connectivism, emoji: "📱", image: null, detail: "Social/professional networks, informal and lifelong learning tools, situated simulations, and online communities of practice." }
+      ]
+    },
+    {
+      name: "Designing for Experience", color: COLORS.closing, emoji: "🎯", image: null,
+      detail: "You can't fully design someone's learning experience, but you can design for it through three levers (Peter Goodyear). Every branch on this map is really a different lens on how to design these well.",
+      children: [
+        { name: "Learning Tasks", color: COLORS.closing, emoji: "✅", image: null, detail: "Best practices in interaction design shape what a learner is asked to do." },
+        { name: "Environment", color: COLORS.closing, emoji: "🏗️", image: null, detail: "Thoughtful design of the physical/digital space and multimedia resources learners use." },
+        { name: "Social Relationships", color: COLORS.closing, emoji: "💬", image: null, detail: "Interface and interaction strategies that support and inspire helpful social interaction between learners." }
+      ]
+    }
+  ]
+};
+
+/* =========================================================================
+   SCENE SETUP
+========================================================================= */
+const container = document.getElementById("scene-container");
+const labelLayer = document.getElementById("label-layer");
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(52, container.clientWidth / container.clientHeight, 0.1, 1000);
+camera.position.set(0, 0.9, 9);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(container.clientWidth, container.clientHeight);
+container.insertBefore(renderer.domElement, container.firstChild);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(container.clientWidth, container.clientHeight);
+labelRenderer.domElement.style.position = "absolute";
+labelRenderer.domElement.style.top = "0";
+labelRenderer.domElement.style.pointerEvents = "none";
+labelLayer.appendChild(labelRenderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+const pointLight = new THREE.PointLight(0xffffff, 0.6);
+pointLight.position.set(10, 10, 10);
+scene.add(pointLight);
+
+/* ---- Orbit controls: rotate only, center point never moves ---- */
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 0);
+controls.enablePan = false;              // center stays locked in the middle
+controls.enableDamping = true;           // smooth "spin" momentum
+controls.dampingFactor = 0.07;
+controls.rotateSpeed = 0.6;
+controls.minDistance = 3;
+controls.maxDistance = 16;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.5;
+
+let idleTimer = null;
+controls.addEventListener("start", () => {
+  controls.autoRotate = false;
+  clearTimeout(idleTimer);
+});
+controls.addEventListener("end", () => {
+  idleTimer = setTimeout(() => { controls.autoRotate = true; }, 4000);
+});
+
+/* =========================================================================
+   LAYOUT — position every node once in 3D space (static; only visibility
+   and scale animate on expand/collapse, positions never move)
+========================================================================= */
+function fibonacciSphere(samples) {
+  const pts = [];
+  if (samples === 1) { pts.push(new THREE.Vector3(0, 1, 0)); return pts; }
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < samples; i++) {
+    const y = 1 - (i / (samples - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = goldenAngle * i;
+    pts.push(new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r));
+  }
+  return pts;
+}
+
+function coneDirections(axis, count, coneAngleDeg) {
+  const up = Math.abs(axis.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const perp1 = new THREE.Vector3().crossVectors(axis, up).normalize();
+  const perp2 = new THREE.Vector3().crossVectors(axis, perp1).normalize();
+  const coneAngle = THREE.MathUtils.degToRad(coneAngleDeg);
+  const dirs = [];
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + 0.35;
+    const dir = new THREE.Vector3()
+      .copy(axis).multiplyScalar(Math.cos(coneAngle))
+      .addScaledVector(perp1, Math.cos(angle) * Math.sin(coneAngle))
+      .addScaledVector(perp2, Math.sin(angle) * Math.sin(coneAngle))
+      .normalize();
+    dirs.push(dir);
+  }
+  return dirs;
+}
+
+const R1 = 2.6;   // branch radius (arm length from center — shortened 50%)
+const R2 = 4.2;   // leaf radius (arm length from center — shortened 50%)
+
+data.position = new THREE.Vector3(0, 0, 0);
+const branchDirs = fibonacciSphere(data.children.length);
+data.children.forEach((branch, i) => {
+  branch.position = branchDirs[i].clone().multiplyScalar(R1);
+  const leafDirs = coneDirections(branchDirs[i], branch.children.length, 26);
+  branch.children.forEach((leaf, j) => {
+    leaf.position = leafDirs[j].clone().multiplyScalar(R2);
+  });
+});
+
+/* =========================================================================
+   BUILD SCENE OBJECTS
+========================================================================= */
+function makePlaceholderCanvas(emoji, color) {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext("2d");
+
+  const grad = ctx.createRadialGradient(size*0.35, size*0.32, size*0.05, size/2, size/2, size*0.55);
+  grad.addColorStop(0, shade(color, 25));
+  grad.addColorStop(1, color);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(size/2, size/2, size*0.46, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = "rgba(255,255,255,0.75)";
+  ctx.beginPath();
+  ctx.arc(size/2, size/2, size*0.44, 0, Math.PI*2);
+  ctx.stroke();
+
+  ctx.font = `${size*0.42}px "Apple Color Emoji","Segoe UI Emoji",sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(emoji || "●", size/2, size*0.54);
+
+  return canvas;
+}
+function shade(hex, percent) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, (n >> 16) + percent);
+  const g = Math.min(255, ((n >> 8) & 0xff) + percent);
+  const b = Math.min(255, (n & 0xff) + percent);
+  return `rgb(${r},${g},${b})`;
+}
+
+// Loads a real photo and crops/masks it into the same circular, ringed
+// style as the generated placeholders — so any image (any shape, any
+// aspect ratio) automatically matches the look of the rest of the map.
+// Calls onReady(canvas, dataUrl) once it's done; silently leaves the
+// placeholder in place if the image fails to load.
+function loadImageAsCircle(url, onReady) {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    const size = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.46, 0, Math.PI * 2);
+    ctx.clip();
+    const scale = Math.max(size / img.naturalWidth, size / img.naturalHeight);
+    const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+    ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+    ctx.restore();
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = "rgba(255,255,255,0.75)";
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.44, 0, Math.PI * 2);
+    ctx.stroke();
+    onReady(canvas, canvas.toDataURL());
+  };
+  img.onerror = () => console.warn("Could not load image, keeping placeholder:", url);
+  img.src = url;
+}
+
+const registry = []; // flat list of every node's runtime info, for raycasting + controls
+
+function buildNode(nodeData, depth, parentWorldPos) {
+  const group = new THREE.Group();
+  group.position.copy(nodeData.position);
+  group.visible = depth === 0;
+  group.scale.setScalar(depth === 0 ? 1 : 0.0001);
+
+  const size = depth === 0 ? 1.0 : depth === 1 ? 0.75 : 0.55;
+  // Render the placeholder immediately so nothing is ever blank; if
+  // nodeData.image is set, swap it in (auto-cropped to match the circular
+  // placeholder style) once it finishes loading.
+  const placeholderCanvas = makePlaceholderCanvas(nodeData.emoji, nodeData.color);
+  const texture = new THREE.CanvasTexture(placeholderCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(size, size, 1);
+  group.add(sprite);
+
+  // persistent name label, sits underneath the point. The anchor div is
+  // what CSS2DObject tracks in 3D; the inner label div gets its own
+  // downward offset set dynamically each frame (see positionLabels()) so
+  // it always clears below the visible circle, at any zoom level.
+  const labelAnchor = document.createElement("div");
+  labelAnchor.className = "node-label-anchor";
+  const labelDiv = document.createElement("div");
+  labelDiv.className = `node-label depth-${depth}`;
+  labelDiv.textContent = nodeData.name;
+  labelDiv.style.borderLeftColor = nodeData.color;
+  labelDiv.style.display = depth === 0 ? "block" : "none";
+  labelAnchor.appendChild(labelDiv);
+  const labelObj = new CSS2DObject(labelAnchor);
+  labelObj.position.set(0, 0, 0);
+  group.add(labelObj);
+
+  scene.add(group);
+
+  const entry = {
+    data: nodeData, depth, group, sprite, labelDiv,
+    imageSrc: placeholderCanvas.toDataURL(),
+    expanded: false, childEntries: []
+  };
+  registry.push(entry);
+
+  if (nodeData.image) {
+    loadImageAsCircle(nodeData.image, (canvas, dataUrl) => {
+      const newTexture = new THREE.CanvasTexture(canvas);
+      newTexture.colorSpace = THREE.SRGBColorSpace;
+      sprite.material.map = newTexture;
+      sprite.material.needsUpdate = true;
+      entry.imageSrc = dataUrl;
+      if (selectedEntry === entry) panelThumb.src = dataUrl; // live-update an already-open panel
+    });
+  }
+
+  if (nodeData.children) {
+    nodeData.children.forEach(childData => {
+      const childEntry = buildNode(childData, depth + 1, nodeData.position);
+      childEntry.parentEntry = entry;
+      childEntry.line = buildLine(nodeData.position, childData.position, childData.color);
+      entry.childEntries.push(childEntry);
+    });
+  }
+  return entry;
+}
+
+function buildLine(fromPos, toPos, color) {
+  const geometry = new THREE.BufferGeometry().setFromPoints([fromPos, toPos]);
+  const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0 });
+  const line = new THREE.Line(geometry, material);
+  line.visible = false;
+  scene.add(line);
+  return line;
+}
+
+const rootEntry = buildNode(data, 0, new THREE.Vector3(0,0,0));
+
+/* =========================================================================
+   TWEENING (lightweight, no external library)
+========================================================================= */
+const tweens = [];
+function easeOutBack(t) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
+function easeInCubic(t) { return t * t * t; }
+function easeInOutCubic(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+function addTween(from, to, duration, onUpdate, onComplete, ease) {
+  tweens.push({ from, to, start: performance.now(), duration, onUpdate, onComplete, ease: ease || easeOutBack });
+}
+function stepTweens(now) {
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    const tw = tweens[i];
+    const t = Math.min(1, (now - tw.start) / tw.duration);
+    const v = tw.from + (tw.to - tw.from) * tw.ease(t);
+    tw.onUpdate(v);
+    if (t >= 1) { tweens.splice(i, 1); if (tw.onComplete) tw.onComplete(); }
+  }
+}
+
+// Vector3 tweens — used to smoothly "shift the frame focus" (camera position + orbit target)
+const vecTweens = [];
+function addVecTween(fromVec, toVec, duration, onUpdate, ease) {
+  vecTweens.push({ from: fromVec.clone(), to: toVec.clone(), start: performance.now(), duration, onUpdate, ease: ease || easeInOutCubic });
+}
+function stepVecTweens(now) {
+  const tmp = new THREE.Vector3();
+  for (let i = vecTweens.length - 1; i >= 0; i--) {
+    const tw = vecTweens[i];
+    const t = Math.min(1, (now - tw.start) / tw.duration);
+    tmp.lerpVectors(tw.from, tw.to, tw.ease(t));
+    tw.onUpdate(tmp);
+    if (t >= 1) vecTweens.splice(i, 1);
+  }
+}
+
+/* =========================================================================
+   FOCUS / CAMERA NAVIGATION
+   focusStack tracks the drill-down path (breadcrumb). Clicking an
+   expandable point pushes it and shifts the frame to center on it;
+   collapsing pops it and shifts the frame back to the previous point.
+========================================================================= */
+const focusStack = [];
+const FOCUS_DURATION = 850;
+const FOCUS_DISTANCE = [9, 4.3, 2.8]; // root, branch (secondary), leaf (tertiary)
+function distanceForEntry(entry) {
+  return FOCUS_DISTANCE[entry.depth] ?? 2.8;
+}
+function focusOn(entry) {
+  const toTarget = entry.group.position.clone();
+  const fromTarget = controls.target.clone();
+  const currentOffset = camera.position.clone().sub(controls.target);
+  const dir = currentOffset.lengthSq() > 0.0001 ? currentOffset.clone().normalize() : new THREE.Vector3(0, 0.08, 1).normalize();
+  const toCamPos = toTarget.clone().addScaledVector(dir, distanceForEntry(entry));
+  const fromCamPos = camera.position.clone();
+
+  addVecTween(fromTarget, toTarget, FOCUS_DURATION, v => controls.target.copy(v));
+  addVecTween(fromCamPos, toCamPos, FOCUS_DURATION, v => camera.position.copy(v));
+}
+
+/* =========================================================================
+   INFO PANEL — a single shared opaque side drawer (not tied to any one
+   node's 3D position). Opening it shrinks the 3D view to 60% width; closing
+   it returns the 3D view to full width. Only the selected node's label is
+   ever hidden — everything else in view keeps its title.
+========================================================================= */
+const appEl = document.getElementById("app");
+const infoPanelEl = document.getElementById("info-panel");
+const panelThumb = document.getElementById("panel-thumb");
+const panelTitle = document.getElementById("panel-title");
+const panelText = document.getElementById("panel-text");
+
+let selectedEntry = null;
+
+function syncLabel(entry) {
+  const show = entry.group.visible && selectedEntry !== entry;
+  entry.labelDiv.style.display = show ? "block" : "none";
+}
+
+function selectNode(entry) {
+  const previous = selectedEntry;
+  selectedEntry = entry;
+  panelThumb.src = entry.imageSrc;
+  panelTitle.textContent = entry.data.name;
+  panelTitle.style.color = entry.data.color;
+  panelText.textContent = entry.data.detail || "";
+  appEl.classList.add("panel-open");
+  infoPanelEl.classList.add("open");
+  if (previous) syncLabel(previous);
+  syncLabel(entry); // hides this node's own title while its panel is open
+}
+function deselectNode() {
+  const previous = selectedEntry;
+  selectedEntry = null;
+  appEl.classList.remove("panel-open");
+  infoPanelEl.classList.remove("open");
+  if (previous) syncLabel(previous);
+}
+document.getElementById("panel-close").addEventListener("click", () => {
+  if (!selectedEntry) return;
+  const entry = selectedEntry;
+  deselectNode();
+  const idx = focusStack.indexOf(entry);
+  if (idx !== -1) focusStack.splice(idx, 1);
+  focusOn(focusStack[focusStack.length - 1] || rootEntry);
+});
+
+// Removes entry (and anything deeper) from the focus breadcrumb — used
+// whenever a node gets force-hidden outside the normal click flow, so
+// "collapse" never tries to shift focus back to a point that's no longer
+// on screen.
+function pruneFocusStack(entry) {
+  const idx = focusStack.indexOf(entry);
+  if (idx !== -1) focusStack.splice(idx);
+}
+
+function expandEntry(entry) {
+  entry.expanded = true;
+  entry.childEntries.forEach(child => {
+    child.group.visible = true;
+    addTween(0.0001, 1, 500, v => child.group.scale.setScalar(v));
+    if (child.line) {
+      child.line.visible = true;
+      addTween(0, 0.6, 500, v => child.line.material.opacity = v);
+    }
+    syncLabel(child);
+  });
+}
+function collapseEntry(entry) {
+  entry.expanded = false;
+  entry.childEntries.forEach(child => {
+    addTween(child.group.scale.x, 0.0001, 300, v => child.group.scale.setScalar(v), () => {
+      child.group.visible = false;
+      hideInstant(child);
+    }, easeInCubic);
+    if (child.line) {
+      addTween(child.line.material.opacity, 0, 300, v => child.line.material.opacity = v, () => { child.line.visible = false; }, easeInCubic);
+    }
+    if (selectedEntry === child) deselectNode();
+    pruneFocusStack(child);
+    child.labelDiv.style.display = "none";
+  });
+}
+function hideInstant(entry) {
+  entry.expanded = false;
+  if (selectedEntry === entry) deselectNode();
+  pruneFocusStack(entry);
+  entry.childEntries.forEach(child => {
+    child.group.visible = false;
+    child.group.scale.setScalar(0.0001);
+    child.labelDiv.style.display = "none";
+    if (child.line) { child.line.visible = false; child.line.material.opacity = 0; }
+    hideInstant(child);
+  });
+}
+
+// Hide/show the OTHER children of entry's parent — keeps only the active
+// branch of the current tier on screen ("hide all other points until a
+// parent node is clicked").
+function hideSiblings(entry) {
+  if (!entry.parentEntry) return;
+  entry.parentEntry.childEntries.forEach(sib => {
+    if (sib === entry) return;
+    if (sib.expanded) collapseEntry(sib); // retract any of its own open children first
+    if (selectedEntry === sib) deselectNode();
+    pruneFocusStack(sib);
+    addTween(sib.group.scale.x, 0.0001, 350, v => sib.group.scale.setScalar(v), () => { sib.group.visible = false; }, easeInCubic);
+    if (sib.line) addTween(sib.line.material.opacity, 0, 350, v => sib.line.material.opacity = v, () => { sib.line.visible = false; }, easeInCubic);
+    sib.labelDiv.style.display = "none";
+  });
+}
+function showSiblings(entry) {
+  if (!entry.parentEntry) return;
+  entry.parentEntry.childEntries.forEach(sib => {
+    if (sib === entry) return;
+    sib.group.visible = true;
+    addTween(0.0001, 1, 400, v => sib.group.scale.setScalar(v));
+    if (sib.line) { sib.line.visible = true; addTween(0, 0.6, 400, v => sib.line.material.opacity = v); }
+    syncLabel(sib);
+  });
+}
+
+function handleNodeClick(entry) {
+  const hasChildren = entry.childEntries.length > 0;
+
+  if (hasChildren && entry.expanded) {
+    // COLLAPSE — hide this tier, restore its siblings, shift focus back to
+    // whatever was focused before it (the "previous point").
+    if (selectedEntry === entry) deselectNode();
+    collapseEntry(entry);
+    showSiblings(entry);
+    const idx = focusStack.indexOf(entry);
+    if (idx !== -1) focusStack.splice(idx, 1);
+    focusOn(focusStack[focusStack.length - 1] || rootEntry);
+    return;
+  }
+
+  if (hasChildren) {
+    // EXPAND — hide sibling points first so only this branch is visible,
+    // reveal its children, and shift the frame to focus on it.
+    hideSiblings(entry);
+    expandEntry(entry);
+    selectNode(entry);
+    focusStack.push(entry);
+    focusOn(entry);
+    return;
+  }
+
+  // Leaf (tertiary) node — no further tier, but still dolly the camera to it
+  // like a secondary node, and shift back when it's deselected.
+  if (selectedEntry === entry) {
+    deselectNode();
+    const idx = focusStack.indexOf(entry);
+    if (idx !== -1) focusStack.splice(idx, 1);
+    focusOn(focusStack[focusStack.length - 1] || rootEntry);
+  } else {
+    selectNode(entry);
+    focusStack.push(entry);
+    focusOn(entry);
+  }
+}
+
+document.getElementById("btn-expand").addEventListener("click", () => {
+  function expandAll(entry) {
+    if (entry.childEntries.length && !entry.expanded) expandEntry(entry);
+    entry.childEntries.forEach(expandAll);
+  }
+  expandAll(rootEntry);
+  if (selectedEntry) deselectNode();
+  registry.forEach(en => syncLabel(en));
+  focusStack.length = 0;
+  focusStack.push(rootEntry);
+  focusOn(rootEntry);
+});
+document.getElementById("btn-reset").addEventListener("click", () => {
+  collapseEntry(rootEntry);
+  if (selectedEntry) deselectNode();
+  syncLabel(rootEntry);
+  focusStack.length = 0;
+  focusOn(rootEntry);
+});
+
+/* =========================================================================
+   CLICK DETECTION (distinguish a click from a drag-to-rotate)
+========================================================================= */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let pointerDown = null;
+
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  pointerDown = { x: e.clientX, y: e.clientY };
+});
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!pointerDown) return;
+  const dx = e.clientX - pointerDown.x, dy = e.clientY - pointerDown.y;
+  pointerDown = null;
+  if (Math.sqrt(dx*dx + dy*dy) > 6) return; // was a drag/rotate, not a click
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const candidates = registry.filter(en => en.group.visible).map(en => en.sprite);
+  const hits = raycaster.intersectObjects(candidates, false);
+  if (hits.length) {
+    const hitSprite = hits[0].object;
+    const entry = registry.find(en => en.sprite === hitSprite);
+    if (entry) {
+      handleNodeClick(entry);
+      document.getElementById("hint").style.opacity = 0;
+    }
+  }
+});
+
+/* =========================================================================
+   RESIZE + RENDER LOOP
+   The 3D viewport resizes both on window resize AND whenever the info
+   panel opens/closes (the container's flex-basis animates from 100% to
+   60%), so a ResizeObserver on the container catches both cases.
+========================================================================= */
+function onContainerResize() {
+  const w = container.clientWidth, h = container.clientHeight;
+  if (w === 0 || h === 0) return;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  labelRenderer.setSize(w, h);
+}
+window.addEventListener("resize", onContainerResize);
+new ResizeObserver(onContainerResize).observe(container);
+
+// Keep every label pinned just below its circle's actual on-screen edge,
+// regardless of zoom/distance — computed fresh each frame since distance
+// (and therefore apparent circle size) keeps changing as the camera moves.
+const LABEL_GAP = 8; // px of breathing room between the circle's edge and the label
+const vFovRad = THREE.MathUtils.degToRad(camera.fov);
+function spriteScreenRadiusPx(entry) {
+  const dist = Math.max(0.001, camera.position.distanceTo(entry.group.position));
+  const worldHeightAtDist = 2 * Math.tan(vFovRad / 2) * dist;
+  const pxPerWorldUnit = container.clientHeight / worldHeightAtDist;
+  const worldSize = entry.sprite.scale.x * entry.group.scale.x;
+  return (worldSize / 2) * pxPerWorldUnit;
+}
+function positionLabels() {
+  registry.forEach(entry => {
+    if (!entry.group.visible) return;
+    const offset = spriteScreenRadiusPx(entry) + LABEL_GAP;
+    entry.labelDiv.style.transform = `translate(-50%, ${offset}px)`;
+  });
+}
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  controls.update();
+  stepTweens(now);
+  stepVecTweens(now);
+  positionLabels();
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
